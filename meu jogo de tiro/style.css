@@ -1,0 +1,38 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background-color: black;
+  color: white;
+  text-align: center;
+}
+
+#game-container {
+  display: none;
+  position: relative;
+}
+
+canvas {
+  background-color: #111;
+  display: block;
+  margin: 0 auto;
+  border: 2px solid white;
+}
+
+#score {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  font-size: 18px;
+  color: white;
+}
+
+#start-screen,
+#game-over-screen {
+  margin-top: 200px;
+}
+
+button {
+  padding: 10px 20px;
+  font-size: 16px;
+  cursor: pointer;
+}

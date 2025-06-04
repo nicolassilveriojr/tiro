@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Jogo de Tiro</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="start-screen">
+    <h1>🚀 Jogo de Tiro</h1>
+    <button id="start-button">Jogar</button>
+  </div>
+
+  <div id="game-container">
+    <canvas id="gameCanvas" width="480" height="640"></canvas>
+    <div id="score">Pontuação: 0</div>
+  </div>
+
+  <div id="game-over-screen">
+    <h2>💀 Fim de Jogo</h2>
+    <p id="final-score"></p>
+    <button id="restart-button">Jogar Novamente</button>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
