@@ -1,27 +1,402 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <title>Jogo de Tiro</title>
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Melhor Jogo de Tiro 3D - Gemini Pro</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #222;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            cursor: default; /* Remove cursor padrão */
+        }
+        canvas {
+            display: block;
+        }
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-size: 2em;
+            text-align: center;
+            z-index: 100;
+        }
+        #instructions {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 1.5em;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+    </style>
 </head>
 <body>
-  <div id="start-screen">
-    <h1>🚀 Jogo de Tiro</h1>
-    <button id="start-button">Jogar</button>
-  </div>
+    <div id="blocker">
+        <div id="instructions">
+            <p>Clique para jogar</p>
+            <p>
+                Mover: WASD<br/>
+                Olhar: Mouse<br/>
+                Atirar: Clique Esquerdo do Mouse
+            </p>
+            <button id="startButton">Começar Jogo</button>
+        </div>
+    </div>
 
-  <div id="game-container">
-    <canvas id="gameCanvas" width="480" height="640"></canvas>
-    <div id="score">Pontuação: 0</div>
-  </div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ammo.js@0.0.10/ammo.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/controls/PointerLockControls.js"></script>
 
-  <div id="game-over-screen">
-    <h2>💀 Fim de Jogo</h2>
-    <p id="final-score"></p>
-    <button id="restart-button">Jogar Novamente</button>
-  </div>
+    <script>
+        // --- Variáveis Globais ---
+        let camera, scene, renderer;
+        let world, physicsWorld; // Renomeado para evitar conflito com 'world' de Cannon.js (anterior)
+        let controls; // PointerLockControls
+        let raycaster; // Para detecção de clique
 
-  <script src="game.js"></script>
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+
+        let prevTime = performance.now();
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+
+        // Armazenamento de objetos 3D e corpos de física
+        const rigidBodies = [];
+        const bodiesMap = new Map(); // Para mapear Mesh para Ammo.js Body
+
+        // --- Configurações da Física ---
+        const GRAVITY_CONSTANT = -9.8; // Gravidade
+        const collisionConfiguration = new Ammo.btDefaultCollisionConfiguration();
+        const dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration);
+        const broadphase = new Ammo.btDbvtBroadphase();
+        const solver = new Ammo.btSequentialImpulseConstraintSolver();
+
+        // --- Elementos UI ---
+        const blocker = document.getElementById('blocker');
+        const instructions = document.getElementById('instructions');
+        const startButton = document.getElementById('startButton');
+
+        // --- Inicialização do Jogo ---
+        init();
+        animate(); // Chamado uma vez para renderizar a tela de início
+
+        function init() {
+            // Inicializa a câmera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 1.6, 0); // Posição do jogador
+
+            // Inicializa a cena
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Céu
+            scene.fog = new THREE.Fog(0x87CEEB, 0, 750); // Nevoeiro para profundidade
+
+            // Luzes
+            const light = new THREE.HemisphereLight(0xaaaaaa, 0x444444, 1);
+            light.position.set(0, 20, 0);
+            scene.add(light);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            dirLight.position.set(-10, 10, -10);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 1024;
+            dirLight.shadow.mapSize.height = 1024;
+            dirLight.shadow.camera.near = 0.5;
+            dirLight.shadow.camera.far = 50;
+            scene.add(dirLight);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // Controles de câmera de primeira pessoa
+            controls = new THREE.PointerLockControls(camera, document.body);
+
+            startButton.addEventListener('click', () => {
+                controls.lock();
+            });
+
+            controls.addEventListener('lock', () => {
+                blocker.style.display = 'none';
+            });
+
+            controls.addEventListener('unlock', () => {
+                blocker.style.display = 'flex';
+            });
+
+            scene.add(controls.getObject());
+
+            // Raycaster para detecção de clique/tiro
+            raycaster = new THREE.Raycaster();
+
+            // Eventos de teclado para movimentação
+            const onKeyDown = function (event) {
+                switch (event.code) {
+                    case 'ArrowUp':
+                    case 'KeyW':
+                        moveForward = true;
+                        break;
+                    case 'ArrowLeft':
+                    case 'KeyA':
+                        moveLeft = true;
+                        break;
+                    case 'ArrowDown':
+                    case 'KeyS':
+                        moveBackward = true;
+                        break;
+                    case 'ArrowRight':
+                    case 'KeyD':
+                        moveRight = true;
+                        break;
+                }
+            };
+
+            const onKeyUp = function (event) {
+                switch (event.code) {
+                    case 'ArrowUp':
+                    case 'KeyW':
+                        moveForward = false;
+                        break;
+                    case 'ArrowLeft':
+                    case 'KeyA':
+                        moveLeft = false;
+                        break;
+                    case 'ArrowDown':
+                    case 'KeyS':
+                        moveBackward = false;
+                        break;
+                        case 'ArrowRight':
+                    case 'KeyD':
+                        moveRight = false;
+                        break;
+                }
+            };
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousedown', onMouseDown); // Evento de clique para atirar
+
+            window.addEventListener('resize', onWindowResize);
+
+            // --- Inicialização do Ammo.js ---
+            Ammo().then(function (AmmoLib) {
+                Ammo = AmmoLib; // Atribui a biblioteca carregada à variável global Ammo
+
+                physicsWorld = new Ammo.btDiscreteDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration);
+                physicsWorld.setGravity(new Ammo.btVector3(0, GRAVITY_CONSTANT, 0));
+
+                // Chão de física
+                createPlane();
+
+                // Adicionar alguns alvos
+                createTarget(new THREE.Vector3(0, 1, -10));
+                createTarget(new THREE.Vector3(5, 1, -15));
+                createTarget(new THREE.Vector3(-5, 1, -20));
+
+                // Game está pronto para ser iniciado
+                // Não precisamos de uma variável gameStarted, o `blocker` e `controls.lock()` gerenciam isso.
+            });
+        }
+
+        // --- Funções de Criação de Objetos 3D e Física ---
+
+        function createPlane() {
+            const pos = new THREE.Vector3(0, -0.5, 0);
+            const quat = new THREE.Quaternion(0, 0, 0, 1);
+            const scale = new THREE.Vector3(100, 1, 100); // Chão grande
+
+            const mesh = new THREE.Mesh(
+                new THREE.BoxGeometry(scale.x, scale.y, scale.z),
+                new THREE.MeshStandardMaterial({ color: 0x78a562 }) // Verde da grama
+            );
+            mesh.position.copy(pos);
+            mesh.receiveShadow = true; // Recebe sombras
+            scene.add(mesh);
+
+            // Objeto de física (estático, mass = 0)
+            const shape = new Ammo.btBoxShape(new Ammo.btVector3(scale.x * 0.5, scale.y * 0.5, scale.z * 0.5));
+            const mass = 0;
+            const transform = new Ammo.btTransform();
+            transform.setIdentity();
+            transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+            transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+            const motionState = new Ammo.btDefaultMotionState(transform);
+            const localInertia = new Ammo.btVector3(0, 0, 0);
+            const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
+            const body = new Ammo.btRigidBody(rbInfo);
+
+            physicsWorld.addRigidBody(body);
+            rigidBodies.push(mesh); // Adiciona para atualização na animação
+            bodiesMap.set(mesh, body);
+        }
+
+        function createTarget(position) {
+            const radius = 1;
+            const height = 2;
+            const mesh = new THREE.Mesh(
+                new THREE.CylinderGeometry(radius, radius, height, 32),
+                new THREE.MeshStandardMaterial({ color: 0xff0000 }) // Alvo vermelho
+            );
+            mesh.position.copy(position);
+            mesh.castShadow = true; // Lança sombras
+            scene.add(mesh);
+
+            const shape = new Ammo.btCylinderShape(new Ammo.btVector3(radius, height * 0.5, radius));
+            const mass = 1; // Pode ser movido
+            const transform = new Ammo.btTransform();
+            transform.setIdentity();
+            transform.setOrigin(new Ammo.btVector3(position.x, position.y, position.z));
+            const motionState = new Ammo.btDefaultMotionState(transform);
+            const localInertia = new Ammo.btVector3(0, 0, 0);
+            shape.calculateLocalInertia(mass, localInertia);
+            const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
+            const body = new Ammo.btRigidBody(rbInfo);
+
+            physicsWorld.addRigidBody(body);
+            rigidBodies.push(mesh);
+            bodiesMap.set(mesh, body);
+        }
+
+        function createBullet() {
+            if (!physicsWorld) return; // Garante que a física está carregada
+
+            const radius = 0.2;
+            const pos = new THREE.Vector3();
+            camera.getWorldPosition(pos); // Posição da bala é a da câmera
+
+            const mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(radius, 16, 16),
+                new THREE.MeshStandardMaterial({ color: 0xffff00 }) // Bala amarela
+            );
+            mesh.position.copy(pos);
+            mesh.castShadow = true;
+            scene.add(mesh);
+
+            const shape = new Ammo.btSphereShape(radius);
+            const mass = 0.5; // Massa da bala
+            const transform = new Ammo.btTransform();
+            transform.setIdentity();
+            transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+            const motionState = new Ammo.btDefaultMotionState(transform);
+            const localInertia = new Ammo.btVector3(0, 0, 0);
+            shape.calculateLocalInertia(mass, localInertia);
+            const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
+            const body = new Ammo.btRigidBody(rbInfo);
+
+            // Adiciona velocidade inicial para frente da câmera
+            const shootVelocity = 50; // Ajuste a força do tiro
+            const cameraDirection = new THREE.Vector3();
+            camera.getWorldDirection(cameraDirection); // Direção da câmera
+            body.setLinearVelocity(new Ammo.btVector3(
+                cameraDirection.x * shootVelocity,
+                cameraDirection.y * shootVelocity,
+                cameraDirection.z * shootVelocity
+            ));
+
+            physicsWorld.addRigidBody(body);
+            rigidBodies.push(mesh);
+            bodiesMap.set(mesh, body);
+
+            // Remover a bala depois de um tempo para não sobrecarregar a cena
+            setTimeout(() => {
+                scene.remove(mesh);
+                physicsWorld.removeRigidBody(body);
+                const index = rigidBodies.indexOf(mesh);
+                if (index > -1) rigidBodies.splice(index, 1);
+                bodiesMap.delete(mesh);
+            }, 3000); // Remove após 3 segundos
+        }
+
+        // --- Eventos ---
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onMouseDown() {
+            if (controls.isLocked) {
+                createBullet();
+            }
+        }
+
+        // --- Loop de Animação ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now();
+            const delta = (time - prevTime) / 1000;
+
+            if (controls.isLocked === true) {
+                // Atualiza a física
+                physicsWorld.stepSimulation(delta, 10); // Passos de simulação
+
+                // Atualiza a posição dos objetos 3D de acordo com a física
+                for (let i = 0; i < rigidBodies.length; i++) {
+                    const mesh = rigidBodies[i];
+                    const body = bodiesMap.get(mesh);
+
+                    // Pega o estado atual do corpo de física
+                    const transform = body.getWorldTransform();
+                    const origin = transform.getOrigin();
+                    const rotation = transform.getRotation();
+
+                    // Atualiza a mesh 3D
+                    mesh.position.set(origin.x(), origin.y(), origin.z());
+                    mesh.quaternion.set(rotation.x(), rotation.y(), rotation.z(), rotation.w());
+                }
+
+                // Movimento do jogador (camera)
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+                velocity.y -= 9.8 * 100.0 * delta; // Gravidade na câmera (se você quiser pular)
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize(); // Garante movimento consistente em todas as direções
+
+                if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
+                if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+                controls.getObject().position.y += (velocity.y * delta); // Move a câmera verticalmente
+
+                if (controls.getObject().position.y < 1.6) { // Limita a altura do jogador (chão)
+                    velocity.y = 0;
+                    controls.getObject().position.y = 1.6;
+                }
+            }
+
+            prevTime = time;
+
+            renderer.render(scene, camera);
+        }
+    </script>
 </body>
 </html>
