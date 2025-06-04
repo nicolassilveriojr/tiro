@@ -69,7 +69,7 @@
     <script>
         // --- Variáveis Globais ---
         let camera, scene, renderer;
-        let world, physicsWorld; // Renomeado para evitar conflito com 'world' de Cannon.js (anterior)
+        let physicsWorld; // Renomeado para evitar conflito com 'world' de Cannon.js (anterior)
         let controls; // PointerLockControls
         let raycaster; // Para detecção de clique
 
@@ -88,19 +88,21 @@
 
         // --- Configurações da Física ---
         const GRAVITY_CONSTANT = -9.8; // Gravidade
-        const collisionConfiguration = new Ammo.btDefaultCollisionConfiguration();
-        const dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration);
-        const broadphase = new Ammo.btDbvtBroadphase();
-        const solver = new Ammo.btSequentialImpulseConstraintSolver();
+        let collisionConfiguration, dispatcher, broadphase, solver; // Definidos após Ammo ser carregado
 
         // --- Elementos UI ---
         const blocker = document.getElementById('blocker');
         const instructions = document.getElementById('instructions');
         const startButton = document.getElementById('startButton');
 
+        // Flag para garantir que o jogo só comece após o carregamento completo do Ammo.js
+        let ammoReady = false;
+
         // --- Inicialização do Jogo ---
+        // A função init() agora só cuida da parte gráfica e de controles.
+        // A inicialização da física foi movida para dentro do Ammo().then().
         init();
-        animate(); // Chamado uma vez para renderizar a tela de início
+        // A animação será chamada apenas quando o Ammo estiver pronto e o jogo começar.
 
         function init() {
             // Inicializa a câmera
@@ -137,11 +139,16 @@
             controls = new THREE.PointerLockControls(camera, document.body);
 
             startButton.addEventListener('click', () => {
-                controls.lock();
+                if (ammoReady) { // Só permite iniciar se Ammo.js estiver pronto
+                    controls.lock();
+                } else {
+                    console.log("Aguardando carregamento do Ammo.js...");
+                }
             });
 
             controls.addEventListener('lock', () => {
                 blocker.style.display = 'none';
+                animate(); // Inicia o loop de animação quando o controle é travado
             });
 
             controls.addEventListener('unlock', () => {
@@ -189,7 +196,7 @@
                     case 'KeyS':
                         moveBackward = false;
                         break;
-                        case 'ArrowRight':
+                    case 'ArrowRight':
                     case 'KeyD':
                         moveRight = false;
                         break;
@@ -203,8 +210,15 @@
             window.addEventListener('resize', onWindowResize);
 
             // --- Inicialização do Ammo.js ---
+            // Esta é a parte crucial: toda a inicialização da física deve estar aqui dentro.
             Ammo().then(function (AmmoLib) {
                 Ammo = AmmoLib; // Atribui a biblioteca carregada à variável global Ammo
+
+                // Agora que Ammo está carregado, inicializamos as configurações da física
+                collisionConfiguration = new Ammo.btDefaultCollisionConfiguration();
+                dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration);
+                broadphase = new Ammo.btDbvtBroadphase();
+                solver = new Ammo.btSequentialImpulseConstraintSolver();
 
                 physicsWorld = new Ammo.btDiscreteDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration);
                 physicsWorld.setGravity(new Ammo.btVector3(0, GRAVITY_CONSTANT, 0));
@@ -217,8 +231,16 @@
                 createTarget(new THREE.Vector3(5, 1, -15));
                 createTarget(new THREE.Vector3(-5, 1, -20));
 
-                // Game está pronto para ser iniciado
-                // Não precisamos de uma variável gameStarted, o `blocker` e `controls.lock()` gerenciam isso.
+                // Define a flag como true, indicando que Ammo.js está pronto
+                ammoReady = true;
+                // Opcional: Atualizar a UI para indicar que o jogo está pronto.
+                startButton.textContent = "Começar Jogo";
+                startButton.style.backgroundColor = "#28a745"; // Mudar cor para verde, por exemplo
+                console.log("Ammo.js carregado e física inicializada!");
+            }).catch(error => {
+                console.error("Erro ao carregar Ammo.js:", error);
+                instructions.innerHTML = "<p style='color: red;'>Erro ao carregar o jogo. Por favor, recarregue a página.</p>";
+                startButton.style.display = "none";
             });
         }
 
@@ -276,13 +298,16 @@
             const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
             const body = new Ammo.btRigidBody(rbInfo);
 
+            // Evita que o corpo de física gire no eixo Y ao ser atingido, mantendo-o "em pé"
+            body.setAngularFactor(new Ammo.btVector3(1, 0, 1)); // Permite rotação em X e Z, mas não em Y
+
             physicsWorld.addRigidBody(body);
             rigidBodies.push(mesh);
             bodiesMap.set(mesh, body);
         }
 
         function createBullet() {
-            if (!physicsWorld) return; // Garante que a física está carregada
+            if (!physicsWorld || !ammoReady) return; // Garante que a física está carregada e pronta
 
             const radius = 0.2;
             const pos = new THREE.Vector3();
@@ -324,10 +349,14 @@
             // Remover a bala depois de um tempo para não sobrecarregar a cena
             setTimeout(() => {
                 scene.remove(mesh);
-                physicsWorld.removeRigidBody(body);
+                if (physicsWorld) physicsWorld.removeRigidBody(body); // Verifica se physicsWorld existe antes de remover
                 const index = rigidBodies.indexOf(mesh);
                 if (index > -1) rigidBodies.splice(index, 1);
                 bodiesMap.delete(mesh);
+                // Libera a memória do Ammo.js se a bala não for mais usada
+                Ammo.destroy(body.getMotionState());
+                Ammo.destroy(body);
+                Ammo.destroy(shape);
             }, 3000); // Remove após 3 segundos
         }
 
@@ -340,7 +369,7 @@
         }
 
         function onMouseDown() {
-            if (controls.isLocked) {
+            if (controls.isLocked && ammoReady) { // Só atira se o controle estiver travado e Ammo estiver pronto
                 createBullet();
             }
         }
@@ -352,7 +381,7 @@
             const time = performance.now();
             const delta = (time - prevTime) / 1000;
 
-            if (controls.isLocked === true) {
+            if (controls.isLocked === true && ammoReady) { // Só roda a física e o movimento se o jogo estiver ativo e Ammo pronto
                 // Atualiza a física
                 physicsWorld.stepSimulation(delta, 10); // Passos de simulação
 
@@ -362,32 +391,42 @@
                     const body = bodiesMap.get(mesh);
 
                     // Pega o estado atual do corpo de física
-                    const transform = body.getWorldTransform();
-                    const origin = transform.getOrigin();
-                    const rotation = transform.getRotation();
+                    if (body && body.getMotionState()) { // Garante que o corpo e seu estado existem
+                        const transform = new Ammo.btTransform();
+                        body.getMotionState().getWorldTransform(transform);
+                        const origin = transform.getOrigin();
+                        const rotation = transform.getRotation();
 
-                    // Atualiza a mesh 3D
-                    mesh.position.set(origin.x(), origin.y(), origin.z());
-                    mesh.quaternion.set(rotation.x(), rotation.y(), rotation.z(), rotation.w());
+                        // Atualiza a mesh 3D
+                        mesh.position.set(origin.x(), origin.y(), origin.z());
+                        mesh.quaternion.set(rotation.x(), rotation.y(), rotation.z(), rotation.w());
+
+                        Ammo.destroy(transform); // Importante liberar a memória do Ammo.js
+                    }
                 }
 
                 // Movimento do jogador (camera)
+                // Reduz a velocidade gradualmente
                 velocity.x -= velocity.x * 10.0 * delta;
                 velocity.z -= velocity.z * 10.0 * delta;
-                velocity.y -= 9.8 * 100.0 * delta; // Gravidade na câmera (se você quiser pular)
+                velocity.y -= 9.8 * 100.0 * delta; // Gravidade na câmera (para simular queda/pulo)
 
+                // Calcula a direção do movimento com base nas teclas pressionadas
                 direction.z = Number(moveForward) - Number(moveBackward);
                 direction.x = Number(moveRight) - Number(moveLeft);
                 direction.normalize(); // Garante movimento consistente em todas as direções
 
+                // Aplica aceleração nas direções de movimento
                 if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
                 if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
 
+                // Move os controles da câmera
                 controls.moveRight(-velocity.x * delta);
                 controls.moveForward(-velocity.z * delta);
                 controls.getObject().position.y += (velocity.y * delta); // Move a câmera verticalmente
 
-                if (controls.getObject().position.y < 1.6) { // Limita a altura do jogador (chão)
+                // Limita a altura do jogador ao chão (simples)
+                if (controls.getObject().position.y < 1.6) {
                     velocity.y = 0;
                     controls.getObject().position.y = 1.6;
                 }
